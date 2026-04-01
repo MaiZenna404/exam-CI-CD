@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-deployment
+  namespace: vitalsync
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend-app
+  # Template for the pod
+  template:
+    metadata:
+      labels:
+        app: backend-app
+    spec:
+      containers:
+        - name: backend
+          image: maizennaa/vitalsync-backend:latest
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: vitalsync-config
+            - secretRef:
+                name: vitalsync-secret
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      resources:
+        limits:
+          memory: "256Mi"
+          cpu: "500m"
+      

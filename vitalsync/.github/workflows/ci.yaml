@@ -4,30 +4,60 @@ name: CI Pipeline
 on:
   push:
     branches:
+      - main
       - dev
   pull_request:
     branches:
       - main
+      - dev
 
 env:
   DOCKER_REGISTRY: docker.io
 
 jobs:
-  build-and-push:
+  lint-test:
+    name: Lint & Tests
     runs-on: ubuntu-latest
 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install backend dependencies
+        working-directory: ./vitalsync/backend
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: ./vitalsync/backend
+        run: |
+          npx eslint . --ext .js
+
+      - name: Run tests
+        working-directory: ./vitalsync/backend
+        run: npm test
+
+  build-and-push:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    needs: lint-test
     permissions:
       contents: read
       packages: write
 
     steps:
-      - name: Lint & Test
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build Docker
+      - name: Set up QEMU and buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Déploiement staging
+      - name: Log in to registry
+        if: ${{ secrets.DOCKER_PASSWORD && secrets.DOCKER_USERNAME }}
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
@@ -35,15 +65,15 @@ jobs:
 
       - name: Extract commit SHA
         id: meta
-        run: |
-          echo "short_sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+        run: echo "short_sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
       - name: Build and push backend image
         uses: docker/build-push-action@v5
         with:
-          context: ./backend
-          file: ./backend/Dockerfile
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          context: ./vitalsync/backend
+          file: ./vitalsync/backend/Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') }}
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/vitalsync-backend:latest
             ${{ secrets.DOCKER_USERNAME }}/vitalsync-backend:${{ steps.meta.outputs.short_sha }}
@@ -51,10 +81,42 @@ jobs:
       - name: Build and push frontend image
         uses: docker/build-push-action@v5
         with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          context: ./vitalsync/frontend
+          file: ./vitalsync/frontend/Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') }}
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/vitalsync-frontend:latest
             ${{ secrets.DOCKER_USERNAME }}/vitalsync-frontend:${{ steps.meta.outputs.short_sha }}
+
+  staging-deploy:
+    name: Deploy to Staging (docker-compose)
+    runs-on: ubuntu-latest
+    needs: build-and-push
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start services with docker-compose
+        working-directory: ./vitalsync
+        run: |
+          docker compose up -d --build
+
+      - name: Wait for backend health
+        working-directory: ./vitalsync
+        run: |
+          set -e
+          echo "Waiting for backend /health..."
+          for i in {1..20}; do
+            resp=$(curl --silent --fail http://localhost:3000/health || true)
+            if [ -n "$resp" ]; then
+              echo "Health OK: $resp"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Backend healthcheck failed" >&2
+          docker compose logs backend || true
+          exit 1
 
