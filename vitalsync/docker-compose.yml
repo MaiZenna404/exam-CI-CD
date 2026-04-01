@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: vitalsync-db
+    environment:
+      POSTGRES_DB: vitalsync
+      POSTGRES_USER: vitalsync
+      POSTGRES_PASSWORD: vitalsync_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - vitalsync-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vitalsync -d vitalsync -h localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    container_name: vitalsync-backend
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=vitalsync
+      - DB_USER=vitalsync
+      - DB_PASSWORD=vitalsync_secret
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - vitalsync-network
+
+  frontend:
+    build: ./frontend
+    container_name: vitalsync-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    environment:
+      - http://backend:3000 # Use backend service name for internal communication
+    networks:
+      - vitalsync-network
+
+volumes:
+  postgres_data:
+
+networks:
+  vitalsync-network:
+    driver: bridge
