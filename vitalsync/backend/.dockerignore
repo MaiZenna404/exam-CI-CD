@@ -1,0 +1,5 @@
+# Ignore files that should not be included in the Docker image
+.env // Car contient les secrets du backend
+node_modules/ // Car fichier volumineux et sera réinstallé àchaque build de l'image
+test/* // Car contient les tests qui ne sont pas nécessaires dans l'image de production
+
